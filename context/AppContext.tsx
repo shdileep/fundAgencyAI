@@ -1,6 +1,9 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { User, FundingCall, Announcement, UserRole, Notification } from '../types';
 import { ADMIN_DOMAIN } from '../constants';
+import { auth, db } from '../firebaseConfig';
+import { onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut } from 'firebase/auth';
+import { ref, onValue, set, push, remove, update, get } from 'firebase/database';
 
 interface AppContextType {
   currentUser: User | null;
@@ -8,8 +11,8 @@ interface AppContextType {
   fundingCalls: FundingCall[];
   announcements: Announcement[];
   notifications: Notification[];
-  login: (email: string, password: string) => { success: boolean; message?: string };
-  signup: (user: Omit<User, 'id'>) => { success: boolean; message?: string };
+  login: (email: string, password: string) => Promise<{ success: boolean; message?: string }>;
+  signup: (user: Omit<User, 'id'>) => Promise<{ success: boolean; message?: string }>;
   logout: () => void;
   updateUserProfile: (user: User) => void;
   addFundingCall: (call: Omit<FundingCall, 'id' | 'createdAt' | 'updatedAt' | 'status'>) => void;
@@ -20,81 +23,32 @@ interface AppContextType {
   deleteAnnouncement: (id: string) => void;
   removeNotification: (id: string) => void;
   repostCall: (id: string, newDeadline: string) => void;
-  
+
   // PWA Install Logic
   isInstallable: boolean;
   installApp: () => void;
+  loading: boolean;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
-// Mock Initial Data
-const INITIAL_USERS: User[] = [
-  { id: '1', username: 'Admin User', email: 'admin@fdc.ac.in', password: 'password123', role: UserRole.ADMIN, designation: 'Director', mobile: '9876543210', location: 'Block A, Office 1' },
-  { id: '2', username: 'John Student', email: 'john@vit.ac.in', password: 'password123', role: UserRole.STUDENT },
-  { id: '3', username: 'Dr. Smith', email: 'smith@gmail.com', password: 'password123', role: UserRole.RESEARCHER }
-];
-
-const INITIAL_CALLS: FundingCall[] = [
-  {
-    id: 'fc_1',
-    title: 'AI Research Grant 2024',
-    agency: 'DST',
-    deadline: new Date(new Date().setDate(new Date().getDate() + 5)).toISOString().split('T')[0], // 5 days from now
-    departments: ['Computer Science', 'Information Technology'],
-    description: 'Grant for advanced AI research in healthcare.',
-    attachmentUrl: 'https://example.com/doc',
-    status: 'Active',
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString()
-  },
-  {
-    id: 'fc_2',
-    title: 'Sustainable Energy Fund',
-    agency: 'SERB',
-    deadline: new Date(new Date().setDate(new Date().getDate() - 2)).toISOString().split('T')[0], // 2 days ago
-    departments: ['Electrical Eng', 'Mechanical Eng'],
-    description: 'Funding for renewable energy projects.',
-    status: 'Expired',
-    createdAt: new Date(new Date().setDate(new Date().getDate() - 30)).toISOString(),
-    updatedAt: new Date(new Date().setDate(new Date().getDate() - 30)).toISOString()
-  }
-];
-
 export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-  // Load users from localStorage or use initial data
-  const [users, setUsers] = useState<User[]>(() => {
-    try {
-      const savedUsers = localStorage.getItem('funding_app_users');
-      return savedUsers ? JSON.parse(savedUsers) : INITIAL_USERS;
-    } catch (error) {
-      console.error('Error loading users from local storage', error);
-      return INITIAL_USERS;
-    }
-  });
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [loading, setLoading] = useState(true);
 
-  // Load current user session from localStorage
-  const [currentUser, setCurrentUser] = useState<User | null>(() => {
-    try {
-      const savedSession = localStorage.getItem('funding_app_session');
-      return savedSession ? JSON.parse(savedSession) : null;
-    } catch (error) {
-      return null;
-    }
-  });
-
-  const [fundingCalls, setFundingCalls] = useState<FundingCall[]>(INITIAL_CALLS);
+  // Data States
+  const [users, setUsers] = useState<User[]>([]);
+  const [fundingCalls, setFundingCalls] = useState<FundingCall[]>([]);
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [notifications, setNotifications] = useState<Notification[]>([]);
 
   // PWA Install State
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
 
+  // Initialize PWA Logic
   useEffect(() => {
     const handler = (e: Event) => {
-      // Prevent the mini-infobar from appearing on mobile
       e.preventDefault();
-      // Stash the event so it can be triggered later.
       setDeferredPrompt(e);
     };
     window.addEventListener('beforeinstallprompt', handler);
@@ -110,162 +64,229 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   };
 
-  // Persist Users to localStorage whenever they change
+  // Sync Data from Firebase
   useEffect(() => {
-    localStorage.setItem('funding_app_users', JSON.stringify(users));
-  }, [users]);
-
-  // Persist Session to localStorage whenever it changes
-  useEffect(() => {
-    if (currentUser) {
-      localStorage.setItem('funding_app_session', JSON.stringify(currentUser));
-    } else {
-      localStorage.removeItem('funding_app_session');
-    }
-  }, [currentUser]);
-
-  // Auto-Archiving Logic & Notification Generation on Mount/Update
-  useEffect(() => {
-    const today = new Date().toISOString().split('T')[0];
-    
-    setFundingCalls(prevCalls => prevCalls.map(call => {
-      if (call.status === 'Active' && call.deadline < today) {
-        return { ...call, status: 'Expired' };
-      }
-      return call;
-    }));
-
-    // Generate notifications for active calls
-    const newNotifications: Notification[] = [];
-    fundingCalls.forEach(call => {
-      if (call.status === 'Active') {
-        const diffTime = Math.abs(new Date(call.deadline).getTime() - new Date().getTime());
-        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)); 
-        
-        if (diffDays <= 3 && new Date(call.deadline) >= new Date()) {
-           // Don't add if already exists to avoid spam in this PoC
-        }
+    // Sync Users
+    const usersRef = ref(db, 'users');
+    const unsubUsers = onValue(usersRef, (snapshot) => {
+      const data = snapshot.val();
+      if (data) {
+        setUsers(Object.values(data));
+      } else {
+        setUsers([]);
       }
     });
 
-  }, [currentUser]); // Run when user changes or periodic
+    // Sync Funding Calls
+    const callsRef = ref(db, 'fundingCalls');
+    const unsubCalls = onValue(callsRef, (snapshot) => {
+      const data = snapshot.val();
+      if (data) {
+        const callsArray = Object.values(data) as FundingCall[];
+        // Sort by createdAt desc
+        setFundingCalls(callsArray.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()));
+      } else {
+        setFundingCalls([]);
+      }
+    });
 
-  const login = (email: string, pass: string) => {
-    const user = users.find(u => u.email === email && u.password === pass);
-    if (user) {
-      setCurrentUser(user);
+    // Sync Announcements
+    const announceRef = ref(db, 'announcements');
+    const unsubAnnounce = onValue(announceRef, (snapshot) => {
+      const data = snapshot.val();
+      if (data) {
+        const arr = Object.values(data) as Announcement[];
+        setAnnouncements(arr.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()));
+      } else {
+        setAnnouncements([]);
+      }
+    });
+
+    // Sync Notifications
+    const notifRef = ref(db, 'notifications');
+    const unsubNotif = onValue(notifRef, (snapshot) => {
+      const data = snapshot.val();
+      if (data) {
+        const arr = Object.values(data) as Notification[];
+        setNotifications(arr.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()));
+      } else {
+        setNotifications([]);
+      }
+    });
+
+    return () => {
+      unsubUsers();
+      unsubCalls();
+      unsubAnnounce();
+      unsubNotif();
+    }
+  }, []);
+
+  // Auth Listener
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (firebaseUser) {
+        // Fetch extended user profile from DB
+        const userRef = ref(db, `users/${firebaseUser.uid}`);
+        const snapshot = await get(userRef);
+        if (snapshot.exists()) {
+          setCurrentUser(snapshot.val());
+        } else {
+          // Fallback if record missing (should rarely happen if signup works right)
+          setCurrentUser({
+            id: firebaseUser.uid,
+            email: firebaseUser.email || '',
+            role: UserRole.STUDENT,
+            username: firebaseUser.displayName || 'User'
+          });
+        }
+      } else {
+        setCurrentUser(null);
+      }
+      setLoading(false);
+    });
+    return unsubscribe;
+  }, []);
+
+  // Update expired calls Logic (Runs locally per client, but updates DB)
+  useEffect(() => {
+    if (!fundingCalls.length) return;
+    const today = new Date().toISOString().split('T')[0];
+
+    fundingCalls.forEach(call => {
+      if (call.status === 'Active' && call.deadline < today) {
+        updateFundingCall({ ...call, status: 'Expired' });
+      }
+    });
+  }, [fundingCalls]);
+
+  const login = async (email: string, pass: string) => {
+    try {
+      await signInWithEmailAndPassword(auth, email, pass);
       return { success: true };
-    }
-    return { success: false, message: 'Invalid credentials' };
-  };
-
-  const signup = (userData: Omit<User, 'id'>) => {
-    if (users.some(u => u.email === userData.email)) {
-      return { success: false, message: 'Email already registered. Please login.' };
-    }
-    
-    // Domain Validation
-    if (userData.role === UserRole.ADMIN && !userData.email.endsWith(ADMIN_DOMAIN)) {
-      return { success: false, message: `Admin email must end with ${ADMIN_DOMAIN}` };
-    }
-    if (userData.role !== UserRole.ADMIN && userData.email.endsWith(ADMIN_DOMAIN)) {
-      return { success: false, message: `Non-admin users cannot use ${ADMIN_DOMAIN}` };
-    }
-
-    const newUser = { ...userData, id: Math.random().toString(36).substr(2, 9) };
-    
-    // Add new user to list (persisted via useEffect)
-    setUsers(prevUsers => [...prevUsers, newUser]);
-    
-    // Automatically log the user in
-    setCurrentUser(newUser);
-    
-    return { success: true };
-  };
-
-  const logout = () => setCurrentUser(null);
-
-  const updateUserProfile = (updatedUser: User) => {
-    setUsers(users.map(u => u.id === updatedUser.id ? updatedUser : u));
-    if (currentUser?.id === updatedUser.id) {
-      setCurrentUser(updatedUser);
+    } catch (createError: any) {
+      return { success: false, message: createError.message };
     }
   };
 
-  const addFundingCall = (callData: Omit<FundingCall, 'id' | 'createdAt' | 'updatedAt' | 'status'>) => {
+  const signup = async (userData: Omit<User, 'id'>) => {
+    try {
+      // Domain Validation
+      if (userData.role === UserRole.ADMIN && !userData.email.endsWith(ADMIN_DOMAIN)) {
+        return { success: false, message: `Admin email must end with ${ADMIN_DOMAIN}` };
+      }
+      if (userData.role !== UserRole.ADMIN && userData.email.endsWith(ADMIN_DOMAIN)) {
+        return { success: false, message: `Non-admin users cannot use ${ADMIN_DOMAIN}` };
+      }
+
+      const userCredential = await createUserWithEmailAndPassword(auth, userData.email, userData.password || 'password123');
+      const uid = userCredential.user.uid;
+
+      const newUser: User = {
+        ...userData,
+        id: uid,
+        // Don't save password in DB
+        password: ''
+      };
+
+      // Save detailed profile to RTDB
+      await set(ref(db, `users/${uid}`), newUser);
+
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, message: err.message };
+    }
+  };
+
+  const logout = () => {
+    signOut(auth);
+  };
+
+  const updateUserProfile = async (updatedUser: User) => {
+    if (updatedUser.id) {
+      await update(ref(db, `users/${updatedUser.id}`), updatedUser);
+      // Local state update handled by onValue listener
+    }
+  };
+
+  const addFundingCall = async (callData: Omit<FundingCall, 'id' | 'createdAt' | 'updatedAt' | 'status'>) => {
+    const callsRef = ref(db, 'fundingCalls');
+    const newCallRef = push(callsRef);
+    const id = newCallRef.key as string;
+
     const newCall: FundingCall = {
       ...callData,
-      id: Math.random().toString(36).substr(2, 9),
+      id,
       status: 'Active',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
-    setFundingCalls([newCall, ...fundingCalls]);
-    
-    // Notify all
-    setNotifications(prev => [{
-      id: Math.random().toString(36).substr(2, 9),
+    await set(newCallRef, newCall);
+
+    // Create Notification
+    const notifRef = push(ref(db, 'notifications'));
+    await set(notifRef, {
+      id: notifRef.key,
       type: 'NEW_CALL',
       message: `New Funding Call: ${newCall.title}`,
       timestamp: new Date().toISOString(),
       relatedId: newCall.id
-    }, ...prev]);
+    });
   };
 
-  const updateFundingCall = (updatedCall: FundingCall) => {
-    setFundingCalls(prev => prev.map(c => c.id === updatedCall.id ? { ...updatedCall, updatedAt: new Date().toISOString() } : c));
+  const updateFundingCall = async (updatedCall: FundingCall) => {
+    await update(ref(db, `fundingCalls/${updatedCall.id}`), {
+      ...updatedCall,
+      updatedAt: new Date().toISOString()
+    });
   };
 
-  const deleteFundingCall = (id: string) => {
-    setFundingCalls(prev => prev.filter(c => c.id !== id));
+  const deleteFundingCall = async (id: string) => {
+    await remove(ref(db, `fundingCalls/${id}`));
   };
 
-  const addAnnouncement = (message: string) => {
+  const addAnnouncement = async (message: string) => {
+    const annRef = push(ref(db, 'announcements'));
+    const id = annRef.key as string;
+
     const newAnnouncement: Announcement = {
-      id: Math.random().toString(36).substr(2, 9),
+      id,
       message,
       createdAt: new Date().toISOString(),
       isReadBy: []
     };
-    setAnnouncements([newAnnouncement, ...announcements]);
+    await set(annRef, newAnnouncement);
 
-    setNotifications(prev => [{
-      id: Math.random().toString(36).substr(2, 9),
+    // Notification
+    const notifRef = push(ref(db, 'notifications'));
+    await set(notifRef, {
+      id: notifRef.key,
       type: 'ANNOUNCEMENT',
       message: `Admin: ${message}`,
       timestamp: new Date().toISOString(),
-      relatedId: newAnnouncement.id
-    }, ...prev]);
+      relatedId: id
+    });
   };
 
-  const updateAnnouncement = (id: string, message: string) => {
-    setAnnouncements(prev => prev.map(a => a.id === id ? { ...a, message } : a));
-    // Also update related notification if exists
-    setNotifications(prev => prev.map(n => n.relatedId === id ? { ...n, message: `Admin: ${message}` } : n));
+  const updateAnnouncement = async (id: string, message: string) => {
+    await update(ref(db, `announcements/${id}`), { message });
+    // Update notif logic if needed, but keeping simple
   };
 
-  const deleteAnnouncement = (id: string) => {
-    setAnnouncements(prev => prev.filter(a => a.id !== id));
-    // Also remove related notification
-    setNotifications(prev => prev.filter(n => n.relatedId !== id));
+  const deleteAnnouncement = async (id: string) => {
+    await remove(ref(db, `announcements/${id}`));
   };
 
-  const removeNotification = (id: string) => {
-    setNotifications(prev => prev.filter(n => n.id !== id));
+  const removeNotification = async (id: string) => {
+    await remove(ref(db, `notifications/${id}`));
   };
 
-  const repostCall = (id: string, newDeadline: string) => {
-    setFundingCalls(prev => prev.map(c => {
-      if (c.id === id) {
-        return {
-          ...c,
-          status: 'Active',
-          deadline: newDeadline,
-          updatedAt: new Date().toISOString()
-        };
-      }
-      return c;
-    }));
+  const repostCall = async (id: string, newDeadline: string) => {
+    await update(ref(db, `fundingCalls/${id}`), {
+      status: 'Active',
+      deadline: newDeadline,
+      updatedAt: new Date().toISOString()
+    });
   };
 
   return (
@@ -275,7 +296,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       addFundingCall, updateFundingCall, deleteFundingCall,
       addAnnouncement, updateAnnouncement, deleteAnnouncement, removeNotification,
       repostCall,
-      isInstallable: !!deferredPrompt, installApp
+      isInstallable: !!deferredPrompt, installApp, loading
     }}>
       {children}
     </AppContext.Provider>
