@@ -8,7 +8,7 @@ const Signup = () => {
   const { state } = useLocation();
   const navigate = useNavigate();
   const { signup } = useApp();
-  
+
   // If no role selected, redirect to role selection
   if (!state || !state.role) {
     return <Navigate to="/role-selection" replace />;
@@ -27,7 +27,7 @@ const Signup = () => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
 
@@ -36,7 +36,7 @@ const Signup = () => {
       return;
     }
 
-    const result = signup({
+    const result = await signup({
       username: formData.username,
       email: formData.email,
       password: formData.password,
@@ -126,7 +126,7 @@ const Signup = () => {
           </div>
         </form>
         <div className="text-center mt-2">
-           <Link to="/login" className="text-sm text-indigo-600 hover:text-indigo-500">Back to Login</Link>
+          <Link to="/login" className="text-sm text-indigo-600 hover:text-indigo-500">Back to Login</Link>
         </div>
       </div>
     </div>

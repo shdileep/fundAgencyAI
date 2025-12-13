@@ -19,9 +19,9 @@ const Login = () => {
     }
   }, [currentUser, navigate]);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const result = login(email, password);
+    const result = await login(email, password);
     if (result.success) {
       // Navigation happens in useEffect above due to state change
     } else {
@@ -83,7 +83,7 @@ const Login = () => {
 
         {isInstallable && (
           <div className="mt-6">
-            <button 
+            <button
               onClick={installApp}
               className="w-full flex items-center justify-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-lg text-gray-700 bg-white hover:bg-gray-50 focus:outline-none"
             >
