@@ -122,30 +122,43 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   }, []);
 
-  // Auth Listener
+  // Auth Listener with Real-time Profile Sync
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+    let unsubscribeProfileStr: (() => void) | undefined;
+
+    const unsubscribeAuth = onAuthStateChanged(auth, (firebaseUser) => {
       if (firebaseUser) {
-        // Fetch extended user profile from DB
+        // Real-time listener for user profile
         const userRef = ref(db, `users/${firebaseUser.uid}`);
-        const snapshot = await get(userRef);
-        if (snapshot.exists()) {
-          setCurrentUser(snapshot.val());
-        } else {
-          // Fallback if record missing (should rarely happen if signup works right)
-          setCurrentUser({
-            id: firebaseUser.uid,
-            email: firebaseUser.email || '',
-            role: UserRole.STUDENT,
-            username: firebaseUser.displayName || 'User'
-          });
-        }
+        unsubscribeProfileStr = onValue(userRef, (snapshot) => {
+          if (snapshot.exists()) {
+            setCurrentUser(snapshot.val());
+          } else {
+            // Profile might not exist YET (race condition usually), but we wait.
+            // Only set temporary fallback if absolutely needed, or just wait.
+            // Giving it a partial user object helps UI show "Loading..." or similar if needed.
+            // But for safer routing, we can defer until role is present.
+            // For now, let's keep the fallback but it will be overwritten instantly when DB write completes.
+            setCurrentUser({
+              id: firebaseUser.uid,
+              email: firebaseUser.email || '',
+              role: UserRole.STUDENT, // Default, but DB update will override this milliseconds later
+              username: firebaseUser.displayName || 'User'
+            });
+          }
+          setLoading(false);
+        });
       } else {
+        if (unsubscribeProfileStr) unsubscribeProfileStr();
         setCurrentUser(null);
+        setLoading(false);
       }
-      setLoading(false);
     });
-    return unsubscribe;
+
+    return () => {
+      unsubscribeAuth();
+      if (unsubscribeProfileStr) unsubscribeProfileStr();
+    };
   }, []);
 
   // Update expired calls Logic (Runs locally per client, but updates DB)
@@ -171,11 +184,22 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const signup = async (userData: Omit<User, 'id'>) => {
     try {
-      // Domain Validation
-      if (userData.role === UserRole.ADMIN && !userData.email.endsWith(ADMIN_DOMAIN)) {
-        return { success: false, message: `Admin email must end with ${ADMIN_DOMAIN}` };
+      // Domain and Format Validation
+      const email = userData.email.toLowerCase();
+      const startsWithDigit = /^\d/.test(email);
+
+      if (userData.role === UserRole.ADMIN) {
+        if (!email.endsWith(ADMIN_DOMAIN)) {
+          // Generic error as requested
+          return { success: false, message: 'Invalid credentials' };
+        }
+        if (startsWithDigit) {
+          // Generic error as requested
+          return { success: false, message: 'Invalid credentials' };
+        }
       }
-      if (userData.role !== UserRole.ADMIN && userData.email.endsWith(ADMIN_DOMAIN)) {
+
+      if (userData.role !== UserRole.ADMIN && email.endsWith(ADMIN_DOMAIN)) {
         return { success: false, message: `Non-admin users cannot use ${ADMIN_DOMAIN}` };
       }
 
