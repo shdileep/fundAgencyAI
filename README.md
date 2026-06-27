@@ -1,51 +1,84 @@
-````md
-<div align="center">
-  <img width="1200" height="475" alt="Funding Call Notice Board Banner" src="YOUR_BANNER_IMAGE_URL" />
-</div>
+# Funding Call Notice Board
 
-# 📢 Funding Call Notice Board
+A centralized web application that allows faculty and researchers to view, filter, and track active funding call opportunities, replacing scattered and delayed communication channels.
 
-A centralized web application for managing and viewing institutional funding opportunities. The platform enables authenticated users to browse active funding calls by **Funding Agency**, **Department**, and **Deadline Month**, while providing administrators with a secure dashboard to create, update, delete, and automatically archive expired funding calls.
+## Features
 
-## ✨ Features
+- Institutional login (no anonymous access)
+- View funding calls categorized by Funding Agency, Deadline Month, and Department
+- Admin dashboard for CRUD operations on funding calls
+- Automatic archiving of calls after their deadline
+- Scalable filter architecture for future categories
 
-- 🔐 Institutional User & Admin Authentication
-- 📋 View Active Funding Calls
-- 🗂️ Categorization by Agency, Department & Month
-- ⚙️ Admin Dashboard (CRUD Operations)
-- 📦 Automatic Archiving of Expired Calls
-- 🔍 Scalable Filter-Based Architecture
-- 📱 Responsive Web Interface
+## Tech Stack
 
-## 🚀 Run Locally
+- **Frontend:** React.js
+- **Backend:** Node.js, Express.js
+- **Database:** MongoDB (Mongoose)
+- **Auth:** JWT
+- **Scheduling:** node-cron (auto-archiving)
 
-**Prerequisites:** Node.js
+## Data Model
 
-1. Clone the repository
-   ```bash
-   git clone https://github.com/your-username/funding-call-notice-board.git
-````
+Each funding call contains:
 
-2. Install dependencies
+- Call ID
+- Title
+- Funding Agency
+- Deadline Date
+- Applicable Departments
+- Description
+- Attachment/URL
+- Status (Active/Archived)
+- Timestamps
 
-   ```bash
-   npm install
-   ```
+## Installation
 
-3. Configure environment variables in `.env`
+```bash
+git clone https://github.com/<your-username>/funding-call-notice-board.git
+cd funding-call-notice-board
 
-4. Start the development server
+# Backend
+cd server
+npm install
+npm start
 
-   ```bash
-   npm run dev
-   ```
-
-## 🛠️ Tech Stack
-
-* Frontend: React.js, Tailwind CSS
-* Backend: Node.js, Express.js
-* Database: MongoDB
-* Authentication: Institutional Login
-
+# Frontend
+cd ../client
+npm install
+npm start
 ```
+
+## Environment Variables
+
+Create a `.env` file in `server/`:
+
+```env
+PORT=5000
+MONGO_URI=mongodb://localhost:27017/funding_call_board
+JWT_SECRET=your_jwt_secret
+ADMIN_EMAIL=admin@institution.edu
+ADMIN_PASSWORD=admin123
 ```
+
+## API Endpoints
+
+| Method | Endpoint            | Access     |
+|--------|----------------------|------------|
+| POST   | /api/auth/login       | Public     |
+| GET    | /api/calls             | User/Admin |
+| GET    | /api/calls/archived    | User/Admin |
+| POST   | /api/calls               | Admin only |
+| PUT    | /api/calls/:id          | Admin only |
+| DELETE | /api/calls/:id          | Admin only |
+
+## Demo Credentials
+
+| Role  | Email                  | Password |
+|-------|--------------------------|----------|
+| User  | user@institution.edu     | user123  |
+| Admin | admin@institution.edu    | admin123 |
+
+## License
+
+MIT
